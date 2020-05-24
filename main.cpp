@@ -31,6 +31,10 @@ struct Ray {
  * Standard algorithm for intersection between line and sphere.
  * Returns optional which has a value if they intersected containing the 
  * parameter of the ray t.
+ * 
+ * Since reflection rays are cast from intersection locations we need to exclude
+ * intersections that are with the reflective surface itself. We therefore 
+ * require that the parameter t is larger than 0.00001.
  */
 std::optional<double> intersects_ball(const Ray& ray, const Ball& ball) {
     Vector3 norm_dir = vector_normalized(ray.dir);
@@ -49,8 +53,17 @@ std::optional<double> intersects_ball(const Ray& ray, const Ball& ball) {
     return std::nullopt;
 }
 
+/*
+ * Returns the light intensity as a function of:
+ * - normal: The normal of the surface at the intersection point.
+ * - light_dir: A vector pointing towards the point light.
+ * - camera_vector: A vector pointing towards the camera used for specular
+ *   lighting.
+ * - specular_parameter: Specifies the exponent in the specular equation.
+ */
 double light_intensity(const Vector3& normal, const Vector3& light_dir,
         const Vector3& camera_vector, double specular_parameter) {
+
     double cos_angle = vector_dot(vector_normalized(normal), vector_normalized(light_dir));
     
     // Ambient light
@@ -71,13 +84,16 @@ double light_intensity(const Vector3& normal, const Vector3& light_dir,
     return lighting;
 }
 
-
+/* 
+ * Returns the color resulting from casting the ray, ray in the scene 
+ * with balls and lights. 
+ * Recursion depth should be set to zero when calling from outside function.
+ */
 Color cast_ray(const Ray& ray,
         const std::vector<Ball> &balls,
         const std::vector<Light> &lights, int recursion_depth) {
 
     auto light = lights[0]; // TODO: Handle more than one light 
-
     // t is ray parameter of the intersection point.
     double closest_t = 999999;
     Color return_color;
@@ -109,12 +125,11 @@ Color cast_ray(const Ray& ray,
                 } else {
                     return_color = local_color;
                 }
-
-
                 closest_t = t;
             }
         }    
     }
+
     // If no objects closer than 10000 units draw background
     if(closest_t >= 10000) {
         return Color({0.2, 0.2, 0.2});
