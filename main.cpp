@@ -11,6 +11,7 @@ struct Ball {
     double radius;
     Color color;
     double specular_parameter;
+    double reflective_parameter;
 };
 
 struct Camera {
@@ -107,7 +108,8 @@ Color cast_ray(const Ray& ray,
                 Vector3 normal_vector = vector_normalized(intersection_point - ball.pos);
                 Vector3 light_dir = light.pos - intersection_point;
                 Vector3 camera_vector = vector_normalized(ray.from - intersection_point);
-                Color local_color = ball.color * light.intensity * light_intensity(
+                Color local_color = ball.color * light.intensity * 
+                    light_intensity(
                         vector_normalized(normal_vector), 
                         light_dir, 
                         camera_vector, 
@@ -118,10 +120,9 @@ Color cast_ray(const Ray& ray,
                     normal_vector * (vector_dot(normal_vector, camera_vector) * 2) - camera_vector,
                 };
 
-                Color reflected_color = {0.0, 0.0, 0.0};
                 if (recursion_depth < 2) {
-                    reflected_color = cast_ray(reflected, balls, lights, recursion_depth+1);
-                    return_color = color_linear_interpolate(local_color, reflected_color, 0.8);
+                    Color reflected_color = cast_ray(reflected, balls, lights, recursion_depth+1);
+                    return_color = color_linear_interpolate(local_color, reflected_color, ball.reflective_parameter);
                 } else {
                     return_color = local_color;
                 }
@@ -145,7 +146,6 @@ double frand(double min, double max) {
 int main(int argc, char **argv) {
     const int W = 800;
     const int H = 800;
-    
     const int max_color = 255;
 
     Light l1 = {{1.0, 1.0, 0.0}, 0.5};
@@ -153,16 +153,48 @@ int main(int argc, char **argv) {
     std::vector<Ball> balls;
     std::vector<Light> lights = {l1};
 
+    srand(time(NULL));
+
     for(int i = 0; i < 30; i++) {
         
         Ball b1 = {
             {(frand(-0.5, 0.5)), frand(-0.5, 0.5), frand(-3, -0.2)}, 
-            frand(0.01, 0.2), 
-            {frand(0, 1), frand(0,1), frand(0,1)},
-            10
+            0.1,
+            {frand(0.3, 1), frand(0.3,1), frand(0.3,1)},
+            frand(100, 1000),
+            frand(0.7, 1.0)
         };
         balls.push_back(b1);
     }
+
+    balls.push_back({
+                {-0.8, 0.8, -0.5},
+                0.5,
+                {0, 0, 0},
+                1000,
+                0.1
+            });
+    balls.push_back({
+                {0.8, 0.8, -0.5},
+                0.5,
+                {0, 0, 0},
+                1000,
+                0.1
+            });
+    balls.push_back({
+                {0.8, -0.8, -0.5},
+                0.5,
+                {0, 0, 0},
+                1000,
+                0.1
+            });
+    balls.push_back({
+                {-0.8, -0.8, -0.5},
+                0.5,
+                {0, 0, 0},
+                1000,
+                0.1
+            });
 
     int red[W*H];
     int green[W*H];
@@ -173,13 +205,8 @@ int main(int argc, char **argv) {
             double dy = static_cast<double>(H-y)/H - 0.5;
             const Vector3 from_vector = {dx, dy, 0};
 
-            const Ray ray = {from_vector, 
-                {
-                    dx, 
-                    dy, 
-                    -1
-                }
-            };
+            // this defines atan(1/2) fov
+            const Ray ray = {from_vector, {dx, dy, -1}};
 
             // cast the ray from this pixel
             Color c = cast_ray(ray, balls, lights, 0);
@@ -193,6 +220,6 @@ int main(int argc, char **argv) {
     red[0] = 255;
     green[0] = 255;
     blue[0] = 255;
-    ppma_write("test.ppm", W, H, red, green, blue);
+    ppma_write("out.ppm", W, H, red, green, blue);
     return 0;
 }
