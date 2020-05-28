@@ -1,18 +1,13 @@
 #include <cstdio>
 #include <vector>
 #include <optional>
+#include <limits>
 
 #include "ppma_io.hpp"
 #include "vector.hpp"
 #include "color.hpp"
-
-struct Ball {
-    Vector3 pos;
-    double radius;
-    Color color;
-    double specular_parameter;
-    double reflective_parameter;
-};
+#include "loader.hpp"
+#include "triangle.hpp"
 
 struct Camera {
     Vector3 pos;
@@ -28,31 +23,6 @@ struct Ray {
     Vector3 dir;
 };
 
-/*
- * Standard algorithm for intersection between line and sphere.
- * Returns optional which has a value if they intersected containing the 
- * parameter of the ray t.
- * 
- * Since reflection rays are cast from intersection locations we need to exclude
- * intersections that are with the reflective surface itself. We therefore 
- * require that the parameter t is larger than 0.00001.
- */
-std::optional<double> intersects_ball(const Ray& ray, const Ball& ball) {
-    Vector3 norm_dir = vector_normalized(ray.dir);
-    double a = vector_length(norm_dir);
-    a = a * a;
-    double b = -2 * vector_dot(norm_dir, ball.pos - ray.from);
-    double c = vector_length(ball.pos - ray.from); 
-    c = c*c - (ball.radius*ball.radius);
-
-    if(b*b - 4*a*c > 0) {
-        double t = (-b - sqrt(b*b - 4*a*c)) / 2*a;
-        if(t < 0.00001) // dont intersect one self
-            return std::nullopt;
-        return std::optional<double>(t);
-    }
-    return std::nullopt;
-}
 
 /*
  * Returns the light intensity as a function of:
@@ -65,7 +35,7 @@ std::optional<double> intersects_ball(const Ray& ray, const Ball& ball) {
 double light_intensity(const Vector3& normal, const Vector3& light_dir,
         const Vector3& camera_vector, double specular_parameter) {
 
-    double cos_angle = vector_dot(vector_normalized(normal), vector_normalized(light_dir));
+    double cos_angle = dot(normalized(normal), normalized(light_dir));
     
     // Ambient light
     double lighting = 0.2;
@@ -75,9 +45,9 @@ double light_intensity(const Vector3& normal, const Vector3& light_dir,
 
     // Specular light
     float s = specular_parameter;
-    Vector3 R = (normal*2*vector_dot(normal, light_dir)) - light_dir;
-    double numerator = vector_dot(R, camera_vector);
-    double denominator = (vector_length(R) * vector_length(camera_vector));
+    Vector3 R = (normal*2*dot(normal, light_dir)) - light_dir;
+    double numerator = dot(R, camera_vector);
+    double denominator = (length(R) * length(camera_vector));
     if(numerator >= 0) {
         double tmp = std::pow(numerator / denominator, s); 
         lighting += tmp;
@@ -85,57 +55,64 @@ double light_intensity(const Vector3& normal, const Vector3& light_dir,
     return lighting;
 }
 
-/* 
- * Returns the color resulting from casting the ray, ray in the scene 
- * with balls and lights. 
- * Recursion depth should be set to zero when calling from outside function.
- */
-Color cast_ray(const Ray& ray,
-        const std::vector<Ball> &balls,
-        const std::vector<Light> &lights, int recursion_depth) {
 
-    auto light = lights[0]; // TODO: Handle more than one light 
-    // t is ray parameter of the intersection point.
-    double closest_t = 999999;
-    Color return_color;
-    for (auto &ball : balls) {
-        auto intersection = intersects_ball(ray, ball);
-        if (intersection) {
-            double t = intersection.value();
-            // Only redraw pixel if this ball is closer (smaller t)
-            if (t < closest_t) {
-                Vector3 intersection_point = (vector_normalized(ray.dir) * t) + ray.from;
-                Vector3 normal_vector = vector_normalized(intersection_point - ball.pos);
-                Vector3 light_dir = light.pos - intersection_point;
-                Vector3 camera_vector = vector_normalized(ray.from - intersection_point);
-                Color local_color = ball.color * light.intensity * 
-                    light_intensity(
-                        vector_normalized(normal_vector), 
-                        light_dir, 
-                        camera_vector, 
-                        ball.specular_parameter);
+std::optional<std::pair<Vector3, Vector3>> intersects_triangle(const Ray& ray, 
+        const Triangle& t) {
+    Vector3 normal = normalized(cross((t.v1 - t.v0), (t.v2 - t.v0)));
+    double D = dot(normal, t.v0);
+    double s = (D - dot(normal, ray.from)) / dot(normal, ray.dir);
+    
+    Vector3 P = ray.dir*s + ray.from;
 
-                Ray reflected = {
-                    intersection_point, 
-                    normal_vector * (vector_dot(normal_vector, camera_vector) * 2) - camera_vector,
+    Vector3 e0 = t.v1 - t.v0;
+    Vector3 e1 = t.v2 - t.v1;
+    Vector3 e2 = t.v0 - t.v2;
+    Vector3 C0 = P - t.v0; 
+    Vector3 C1 = P - t.v1; 
+    Vector3 C2 = P - t.v2; 
+
+    // If inside triangle
+    if (dot(normal, cross(e0, C0)) > 0 &&
+        dot(normal, cross(e1, C1)) > 0 &&
+        dot(normal, cross(e2, C2)) > 0 &&
+        s > 0.000001) {
+
+        return std::optional<std::pair<Vector3, Vector3>>({P, normal});
+    }
+    return std::nullopt;
+}
+
+// double light_intensity(const Vector3& normal, const Vector3& light_dir,
+//         const Vector3& camera_vector, double specular_parameter) {
+    
+Color cast_ray(const Ray& ray, const std::vector<Triangle> &triangles, 
+        const Light& l, int recursion_depth) {
+
+    std::pair<Color, double> c = {{0, 0, 0}, 
+        std::numeric_limits<double>::max()};
+    for(auto &t : triangles) {
+        auto intersection = intersects_triangle(ray, t);
+        if(intersection) {
+            auto P = intersection.value().first;
+            auto N = intersection.value().second;
+            auto new_dir = N*dot(ray.dir, N)*2 - ray.dir;
+
+            // auto reflected_color = cast_ray({P, new_dir}, triangles, l, 
+            //         recursion_depth+1);
+
+            auto color = t.m.color * light_intensity(N, (l.pos - P), 
+                    ray.from - P, 100);
+
+            auto s = length(P-ray.from);
+            if (s < c.second) {
+                c = {
+                    color,
+                    s
                 };
-
-                if (recursion_depth < 2) {
-                    Color reflected_color = cast_ray(reflected, balls, lights, recursion_depth+1);
-                    return_color = color_linear_interpolate(local_color, reflected_color, ball.reflective_parameter);
-                } else {
-                    return_color = local_color;
-                }
-                closest_t = t;
             }
-        }    
+        }
     }
-
-    // If no objects closer than 10000 units draw background
-    if(closest_t >= 10000) {
-        return Color({0.2, 0.2, 0.2});
-    }
-    return return_color;
+    return c.first;
 }
 
 double frand(double min, double max) {
@@ -144,61 +121,22 @@ double frand(double min, double max) {
 }
 
 int main(int argc, char **argv) {
-    const int W = 800;
-    const int H = 800;
+
+    const int W = 400;
+    const int H = 400;
     const int max_color = 255;
 
-    Light l1 = {{1.0, 1.0, 0.0}, 0.5};
+    Light light = {{0, 0, 0.0}, 0.5};
 
-    std::vector<Ball> balls;
-    std::vector<Light> lights = {l1};
-
-    srand(time(NULL));
-
-    for(int i = 0; i < 30; i++) {
-        
-        Ball b1 = {
-            {(frand(-0.5, 0.5)), frand(-0.5, 0.5), frand(-3, -0.2)}, 
-            0.1,
-            {frand(0.3, 1), frand(0.3,1), frand(0.3,1)},
-            frand(100, 1000),
-            frand(0.7, 1.0)
-        };
-        balls.push_back(b1);
-    }
-
-    balls.push_back({
-                {-0.8, 0.8, -0.5},
-                0.5,
-                {0, 0, 0},
-                1000,
-                0.1
-            });
-    balls.push_back({
-                {0.8, 0.8, -0.5},
-                0.5,
-                {0, 0, 0},
-                1000,
-                0.1
-            });
-    balls.push_back({
-                {0.8, -0.8, -0.5},
-                0.5,
-                {0, 0, 0},
-                1000,
-                0.1
-            });
-    balls.push_back({
-                {-0.8, -0.8, -0.5},
-                0.5,
-                {0, 0, 0},
-                1000,
-                0.1
-            });
+    Material r = {{0.5, 0.0, 0.0}, 1.0, 1.0};
+    
+    auto triangles = load_obj("../models/pillar.obj");
 
     int red[W*H];
     int green[W*H];
     int blue[W*H];
+
+    int i = 0;
     for(int x = 0; x < W; x++) {
         for(int y = 0; y < H; y++) {
             double dx = static_cast<double>(x)/W - 0.5;
@@ -209,13 +147,19 @@ int main(int argc, char **argv) {
             const Ray ray = {from_vector, {dx, dy, -1}};
 
             // cast the ray from this pixel
-            Color c = cast_ray(ray, balls, lights, 0);
+            Color c = cast_ray(ray, triangles, light, 0);
             c = color_clamped(c);
 
             red[x + y*W] = static_cast<int>(c.r*max_color);
             green[x + y*W] = static_cast<int>(c.g*max_color);
             blue[x + y*W] = static_cast<int>(c.b*max_color);
+            
+            if(y % (H/40) == 0) {
+                printf("#");
+                fflush(stdout);
+            }
         }
+        printf("\t%i\n", x);
     }
     red[0] = 255;
     green[0] = 255;
